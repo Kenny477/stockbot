@@ -3,14 +3,21 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
+	"github.com/piquette/finance-go/chart"
+	"github.com/piquette/finance-go/datetime"
+	"github.com/piquette/finance-go/quote"
+	gchart "github.com/wcharczuk/go-chart"
 )
 
 func goDotEnvVariable(key string) string {
@@ -32,8 +39,67 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if m.Content == "!ping" {
+	if strings.HasPrefix(m.Content, "!ping") {
 		s.ChannelMessageSend(m.ChannelID, "Pong!")
+	}
+
+	if strings.HasPrefix(m.Content, "!test") {
+		args := strings.Split(m.Content, " ")
+		if len(args) != 2 {
+			s.ChannelMessageSend(m.ChannelID, "Usage: !test <symbol>")
+			return
+		}
+		symbol := args[1]
+		q, err := quote.Get(symbol)
+		if err != nil {
+			// Uh-oh.
+			panic(err)
+		}
+
+		currentTime := time.Now()
+		JavascriptISOString := "2006-01-02T15:04:05.999Z07:00"
+		timestamp := fmt.Sprint(currentTime.Format(JavascriptISOString))
+
+		p := &chart.Params{
+			Symbol:   symbol,
+			Start:    &datetime.Datetime{Month: 1, Day: 1, Year: 2017},
+			End:      &datetime.Datetime{Month: 1, Day: 1, Year: 2018},
+			Interval: datetime.OneDay}
+
+		iter := chart.Get(p)
+		// for iter.Next() {
+		// 	b := iter.Bar()
+		// 	fmt.Println(b)
+
+		// 	// Meta-data for the iterator - (*finance.ChartMeta).
+		// 	fmt.Println(iter.Meta())
+		// }
+
+		// Catch an error, if there was one.
+		if iter.Err() != nil {
+			// Uh-oh!
+			panic(err)
+		}
+
+		graph := gchart.Chart{
+			Series: []gchart.Series{
+				gchart.ContinuousSeries{
+					XValues: []float64{1.0, 2.0, 3.0, 4.0},
+					YValues: []float64{1.0, 2.0, 3.0, 4.0},
+				},
+			},
+		}
+		buffer := bytes.NewBuffer([]byte{})
+		err = graph.Render(gchart.PNG, buffer)
+		f, err := os.Create("test.png")
+		img, err := f.Write(buffer.Bytes())
+		fmt.Printf("wrote %d bytes\n", img)
+
+		embedImage := &discordgo.MessageEmbedImage{URL: "attachment://graph.png"}
+
+		embed := &discordgo.MessageEmbed{Title: fmt.Sprintf("%s (%s)", q.ShortName, q.Symbol), Description: fmt.Sprintf("Price: %.2f %s\nPercent Change: %.2f%% today\nOpen %.2f High %.2f     Low %.2f", q.RegularMarketPrice, q.CurrencyID, q.RegularMarketChangePercent, q.RegularMarketOpen, q.RegularMarketDayHigh, q.RegularMarketDayLow), Timestamp: timestamp, Image: embedImage}
+
+		s.ChannelMessageSendEmbed(m.ChannelID, embed)
 	}
 }
 
