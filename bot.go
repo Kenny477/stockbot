@@ -89,17 +89,20 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				},
 			},
 		}
+
 		buffer := bytes.NewBuffer([]byte{})
 		err = graph.Render(gchart.PNG, buffer)
-		f, err := os.Create("test.png")
-		img, err := f.Write(buffer.Bytes())
-		fmt.Printf("wrote %d bytes\n", img)
 
-		embedImage := &discordgo.MessageEmbedImage{URL: "attachment://graph.png"}
+		reader := bytes.NewReader(buffer.Bytes())
+		embedImg := &discordgo.File{Name: fmt.Sprintf("%s.png", q.Symbol), ContentType: "image/png", Reader: reader}
+
+		embedImage := &discordgo.MessageEmbedImage{URL: "attachment://" + fmt.Sprintf("%s.png", q.Symbol)}
 
 		embed := &discordgo.MessageEmbed{Title: fmt.Sprintf("%s (%s)", q.ShortName, q.Symbol), Description: fmt.Sprintf("Price: %.2f %s\nPercent Change: %.2f%% today\nOpen %.2f High %.2f     Low %.2f", q.RegularMarketPrice, q.CurrencyID, q.RegularMarketChangePercent, q.RegularMarketOpen, q.RegularMarketDayHigh, q.RegularMarketDayLow), Timestamp: timestamp, Image: embedImage}
 
-		s.ChannelMessageSendEmbed(m.ChannelID, embed)
+		msg := &discordgo.MessageSend{Embed: embed, Files: []*discordgo.File{embedImg}}
+
+		s.ChannelMessageSendComplex(m.ChannelID, msg)
 	}
 }
 
