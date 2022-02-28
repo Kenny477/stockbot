@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/piquette/finance-go/chart"
 	"github.com/piquette/finance-go/datetime"
+	"github.com/piquette/finance-go/equity"
 	"github.com/piquette/finance-go/quote"
 	gchart "github.com/wcharczuk/go-chart/v2"
 )
@@ -45,6 +47,28 @@ func minmax(arr []float64) (float64, float64) {
 	return smallest, biggest
 }
 
+func getApproximation(num int) string {
+	log := math.Log10(float64(num))
+	logInt := int(log)
+
+	newNum := float64(num) / math.Pow(10, float64(logInt))
+
+	if logInt >= 12 {
+		return fmt.Sprintf("%.2fT", newNum)
+	}
+	if logInt >= 9 {
+		return fmt.Sprintf("%.2fB", newNum)
+	}
+	if logInt >= 6 {
+		return fmt.Sprintf("%.2fM", newNum)
+	}
+	if logInt >= 3 {
+		return fmt.Sprintf("%.2fK", newNum)
+	}
+
+	return fmt.Sprintf("%d", num)
+}
+
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// ignore all messages created by the bot itself
@@ -64,6 +88,11 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 		symbol := args[1]
 		q, err := quote.Get(symbol)
+		if err != nil {
+			// Uh-oh.
+			panic(err)
+		}
+		eq, err := equity.Get(symbol)
 		if err != nil {
 			// Uh-oh.
 			panic(err)
@@ -117,6 +146,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			panic(err)
 		}
 
+		prevClose := make([]float64, len(x))
+		for i := range prevClose {
+			prevClose[i] = q.RegularMarketPreviousClose
+		}
+
+		prevCloseSeries := &gchart.TimeSeries{
+			Name:    "Previous Close",
+			XValues: x,
+			YValues: prevClose,
+		}
+
 		graph := gchart.Chart{
 			XAxis: gchart.XAxis{
 				TickPosition: gchart.TickPositionBetweenTicks,
@@ -133,6 +173,22 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 					XValues: x,
 					YValues: y,
 				},
+				gchart.AnnotationSeries{
+					Annotations: []gchart.Value2{
+						{XValue: gchart.TimeToFloat64(x[len(x)-1]), YValue: y[len(y)-1], Label: fmt.Sprintf("%s: %.2f", q.Symbol, y[len(y)-1])},
+						{XValue: gchart.TimeToFloat64(x[len(x)-1]), YValue: prevClose[len(prevClose)-1], Label: fmt.Sprintf("Previous Close: %.2f", prevClose[len(prevClose)-1])},
+					},
+					Style: gchart.Style{
+						StrokeColor: gchart.ColorBlack,
+					},
+				},
+				&gchart.MinSeries{
+					InnerSeries: prevCloseSeries,
+					Style: gchart.Style{
+						StrokeColor:     gchart.ColorAlternateGray,
+						StrokeDashArray: []float64{5.0, 5.0},
+					},
+				},
 			},
 		}
 
@@ -143,7 +199,75 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		embedImg := &discordgo.File{Name: fmt.Sprintf("%s.png", q.Symbol), ContentType: "image/png", Reader: reader}
 		embedImage := &discordgo.MessageEmbedImage{URL: "attachment://" + fmt.Sprintf("%s.png", q.Symbol)}
 
-		embed := &discordgo.MessageEmbed{Title: fmt.Sprintf("%s (%s)", q.ShortName, q.Symbol), Description: fmt.Sprintf("Price: %.2f %s\nPercent Change: %.2f%% today\nOpen %.2f High %.2f     Low %.2f", q.RegularMarketPrice, q.CurrencyID, q.RegularMarketChangePercent, q.RegularMarketOpen, q.RegularMarketDayHigh, q.RegularMarketDayLow), Timestamp: timestamp, Image: embedImage}
+		fields := []*discordgo.MessageEmbedField{
+			{
+				Name:   "Price",
+				Value:  fmt.Sprintf("%.2f %s", q.RegularMarketPrice, q.CurrencyID),
+				Inline: true,
+			},
+			{
+				Name:   "Volume",
+				Value:  getApproximation(q.RegularMarketVolume),
+				Inline: true,
+			},
+			{
+				Name:   "Percent Change Today",
+				Value:  fmt.Sprintf("%.2f%%", q.RegularMarketChangePercent),
+				Inline: false,
+			},
+			{
+				Name:   "Previous Close",
+				Value:  fmt.Sprintf("%.2f %s", q.RegularMarketPreviousClose, q.CurrencyID),
+				Inline: false,
+			},
+			{
+				Name:   "Open",
+				Value:  fmt.Sprintf("%.2f", q.RegularMarketOpen),
+				Inline: true,
+			},
+			{
+				Name:   "High",
+				Value:  fmt.Sprintf("%.2f", q.RegularMarketDayHigh),
+				Inline: true,
+			},
+			{
+				Name:   "Low",
+				Value:  fmt.Sprintf("%.2f", q.RegularMarketDayLow),
+				Inline: true,
+			},
+			{
+				Name:   "Market Cap",
+				Value:  getApproximation(int(eq.MarketCap)),
+				Inline: true,
+			},
+			{
+				Name:   "P/E Ratio",
+				Value:  fmt.Sprintf("%.2f", eq.TrailingPE),
+				Inline: true,
+			},
+			{
+				Name:   "Dividend Yield",
+				Value:  fmt.Sprintf("%.2f%%", eq.TrailingAnnualDividendYield*100),
+				Inline: true,
+			},
+			{
+				Name:   "EPS",
+				Value:  fmt.Sprintf("%.2f", eq.EpsTrailingTwelveMonths),
+				Inline: true,
+			},
+			{
+				Name:   "52 Week High",
+				Value:  fmt.Sprintf("%.2f", q.FiftyTwoWeekHigh),
+				Inline: true,
+			},
+			{
+				Name:   "52 Week Low",
+				Value:  fmt.Sprintf("%.2f", q.FiftyTwoWeekLow),
+				Inline: true,
+			},
+		}
+
+		embed := &discordgo.MessageEmbed{Title: fmt.Sprintf("%s (%s)", q.ShortName, q.Symbol), Timestamp: timestamp, Image: embedImage, Fields: fields}
 
 		msg := &discordgo.MessageSend{Embed: embed, Files: []*discordgo.File{embedImg}}
 
