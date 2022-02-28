@@ -1,4 +1,4 @@
-// https://discord.com/oauth2/authorize?client_id=943281411299880970&permissions=8&scope=bot
+//
 
 package main
 
