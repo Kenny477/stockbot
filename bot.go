@@ -17,7 +17,7 @@ import (
 	"github.com/piquette/finance-go/chart"
 	"github.com/piquette/finance-go/datetime"
 	"github.com/piquette/finance-go/quote"
-	gchart "github.com/wcharczuk/go-chart"
+	gchart "github.com/wcharczuk/go-chart/v2"
 )
 
 func goDotEnvVariable(key string) string {
@@ -32,6 +32,19 @@ func goDotEnvVariable(key string) string {
 	return os.Getenv(key)
 }
 
+func minmax(arr []float64) (float64, float64) {
+	smallest, biggest := arr[0], arr[0]
+	for _, v := range arr {
+		if v > biggest {
+			biggest = v
+		}
+		if v < smallest {
+			smallest = v
+		}
+	}
+	return smallest, biggest
+}
+
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// ignore all messages created by the bot itself
@@ -43,10 +56,10 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		s.ChannelMessageSend(m.ChannelID, "Pong!")
 	}
 
-	if strings.HasPrefix(m.Content, "!test") {
+	if strings.HasPrefix(m.Content, "!get") {
 		args := strings.Split(m.Content, " ")
 		if len(args) != 2 {
-			s.ChannelMessageSend(m.ChannelID, "Usage: !test <symbol>")
+			s.ChannelMessageSend(m.ChannelID, "Usage: !get <symbol>")
 			return
 		}
 		symbol := args[1]
@@ -60,20 +73,43 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		JavascriptISOString := "2006-01-02T15:04:05.999Z07:00"
 		timestamp := fmt.Sprint(currentTime.Format(JavascriptISOString))
 
+		currentDay := currentTime.Day()
+		currentMonth := int(currentTime.Month())
+		currentYear := currentTime.Year()
+
+		pastDay := currentDay
+		pastMonth := currentMonth - 1
+		pastYear := currentYear
+		if pastMonth == 0 {
+			pastMonth = 12
+			pastYear--
+		}
+
 		p := &chart.Params{
-			Symbol:   symbol,
-			Start:    &datetime.Datetime{Month: 1, Day: 1, Year: 2017},
-			End:      &datetime.Datetime{Month: 1, Day: 1, Year: 2018},
+			Symbol:   q.Symbol,
+			Start:    &datetime.Datetime{Month: pastMonth, Day: pastDay, Year: pastYear},
+			End:      &datetime.Datetime{Month: currentMonth, Day: currentDay, Year: currentYear},
 			Interval: datetime.OneDay}
 
+		x, y := make([]time.Time, 0), make([]float64, 0)
 		iter := chart.Get(p)
-		// for iter.Next() {
-		// 	b := iter.Bar()
-		// 	fmt.Println(b)
+		for iter.Next() {
+			b := iter.Bar()
 
-		// 	// Meta-data for the iterator - (*finance.ChartMeta).
-		// 	fmt.Println(iter.Meta())
-		// }
+			timestamp := b.Timestamp
+			close := b.Close
+			x = append(x, time.Unix(int64(timestamp), 0))
+			y = append(y, close.InexactFloat64())
+
+			// fmt.Println(timestamp, close)
+			// Meta-data for the iterator - (*finance.ChartMeta).
+			// fmt.Println(iter.Meta())
+		}
+		min, max := minmax(y)
+		r := max - min
+		upperIQ := max + (r * 0.25)
+		lowerIQ := min - (r * 0.25)
+		// fmt.Println(x, y)
 
 		// Catch an error, if there was one.
 		if iter.Err() != nil {
@@ -82,10 +118,20 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		graph := gchart.Chart{
+			XAxis: gchart.XAxis{
+				TickPosition: gchart.TickPositionBetweenTicks,
+			},
+			YAxis: gchart.YAxis{
+				Range: &gchart.ContinuousRange{
+					Max: upperIQ,
+					Min: lowerIQ,
+				},
+			},
 			Series: []gchart.Series{
-				gchart.ContinuousSeries{
-					XValues: []float64{1.0, 2.0, 3.0, 4.0},
-					YValues: []float64{1.0, 2.0, 3.0, 4.0},
+				gchart.TimeSeries{
+					Name:    q.Symbol,
+					XValues: x,
+					YValues: y,
 				},
 			},
 		}
@@ -95,7 +141,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 		reader := bytes.NewReader(buffer.Bytes())
 		embedImg := &discordgo.File{Name: fmt.Sprintf("%s.png", q.Symbol), ContentType: "image/png", Reader: reader}
-
 		embedImage := &discordgo.MessageEmbedImage{URL: "attachment://" + fmt.Sprintf("%s.png", q.Symbol)}
 
 		embed := &discordgo.MessageEmbed{Title: fmt.Sprintf("%s (%s)", q.ShortName, q.Symbol), Description: fmt.Sprintf("Price: %.2f %s\nPercent Change: %.2f%% today\nOpen %.2f High %.2f     Low %.2f", q.RegularMarketPrice, q.CurrencyID, q.RegularMarketChangePercent, q.RegularMarketOpen, q.RegularMarketDayHigh, q.RegularMarketDayLow), Timestamp: timestamp, Image: embedImage}
